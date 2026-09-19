@@ -1,5 +1,6 @@
 package cn.zgccrui.backscreen
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -35,6 +36,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -46,6 +51,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -61,6 +68,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /*
  * THESIS: A small native Android utility for the owner's back display.
@@ -82,18 +90,20 @@ class MainActivity : ComponentActivity() {
             }
             MaterialTheme(colorScheme = scheme) {
                 val model: DisplayViewModel = viewModel()
+                val updater: UpdateViewModel = viewModel()
                 val state by model.state.collectAsStateWithLifecycle()
                 val lifecycle = LocalLifecycleOwner.current.lifecycle
                 LaunchedEffect(lifecycle) {
                     lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                         model.reconnect()
+                        updater.check()
                         while (isActive) {
                             delay(3_000)
                             model.refresh()
                         }
                     }
                 }
-                BackScreen(state, model)
+                BackScreen(state, model, updater)
             }
         }
     }
@@ -101,14 +111,29 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun BackScreen(state: ScreenState, model: DisplayViewModel) {
+private fun BackScreen(state: ScreenState, model: DisplayViewModel, updater: UpdateViewModel) {
     val context = LocalContext.current
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var detailsOpen by rememberSaveable { mutableStateOf(false) }
+    var updateOpen by rememberSaveable { mutableStateOf(false) }
+    val updates by updater.state.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     val operating = state.operation == Operation.ENABLE || state.operation == Operation.DISABLE
     val ready = state.connection == Connection.READY && state.snapshot != null && !operating
 
+    LaunchedEffect(updates.available) {
+        val update = updates.available
+        if (update != null && updates.automatic && !updateOpen) {
+            if (snackbar.showSnackbar("发现新版本 ${update.version}", "查看", true, SnackbarDuration.Long)
+                == SnackbarResult.ActionPerformed) {
+                updateOpen = true
+            }
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("背屏开关") },
@@ -170,6 +195,11 @@ private fun BackScreen(state: ScreenState, model: DisplayViewModel) {
                 Spacer(Modifier.height(28.dp))
                 Text("手机重启后，需要先重新启动 Shizuku。\n背屏唤醒后会按手机设置自动熄屏。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(
+                    onClick = { updateOpen = true; updater.check(manual = true) },
+                    modifier = Modifier.padding(top = 8.dp).heightIn(min = 48.dp),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                ) { Text("版本 ${BuildConfig.VERSION_NAME} · 检查更新") }
             }
         }
     }
@@ -177,6 +207,19 @@ private fun BackScreen(state: ScreenState, model: DisplayViewModel) {
         model.setDisplayId(id)
         settingsOpen = false
     }
+    if (updateOpen) UpdateDialog(
+        updates = updates,
+        onRetry = { updater.check(manual = true) },
+        onDismiss = { updateOpen = false },
+        onDownload = { update ->
+            updateOpen = false
+            try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.downloadUrl)))
+            } catch (_: ActivityNotFoundException) {
+                scope.launch { snackbar.showSnackbar("无法打开浏览器，请安装浏览器后重试。") }
+            }
+        },
+    )
     if (detailsOpen) AlertDialog(
         onDismissRequest = { detailsOpen = false }, title = { Text("错误详情") },
         text = { Text(state.detail, Modifier.verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall) },
@@ -234,6 +277,54 @@ private fun statusDescription(state: ScreenState): String = when {
 }
 
 @Composable
+private fun UpdateDialog(
+    updates: UpdateState,
+    onRetry: () -> Unit,
+    onDownload: (AppUpdate) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val available = updates.available
+    val title = when {
+        updates.checking -> "检查更新"
+        updates.failed -> "暂时无法检查更新"
+        available != null -> "发现新版本 ${available.version}"
+        else -> "检查更新"
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("当前版本 ${BuildConfig.VERSION_NAME}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                when {
+                    updates.checking -> Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Text("正在获取最新版本…")
+                    }
+                    updates.failed -> Text(updates.message)
+                    available != null -> Text("下载 APK 后，按系统提示安装更新。")
+                    else -> Text(updates.message.ifBlank { "未发现更新版本" })
+                }
+            }
+        },
+        confirmButton = {
+            when {
+                updates.checking -> TextButton(onClick = onDismiss) { Text("关闭") }
+                updates.failed -> TextButton(onClick = onRetry) { Text("重试") }
+                available != null -> TextButton(onClick = { onDownload(available) }) { Text("下载更新") }
+                else -> TextButton(onClick = onDismiss) { Text("知道了") }
+            }
+        },
+        dismissButton = {
+            if (!updates.checking && (updates.failed || available != null)) {
+                TextButton(onClick = onDismiss) { Text(if (updates.failed) "关闭" else "稍后") }
+            }
+        },
+    )
+}
+
+@Composable
 private fun DisplaySettings(currentId: Int, onDismiss: () -> Unit, onSave: (Int) -> Unit) {
     var input by rememberSaveable { mutableStateOf(currentId.toString()) }
     val id = input.toIntOrNull()
@@ -242,12 +333,14 @@ private fun DisplaySettings(currentId: Int, onDismiss: () -> Unit, onSave: (Int)
         onDismissRequest = onDismiss,
         title = { Text("副屏设置") },
         text = {
-            OutlinedTextField(
-                value = input, onValueChange = { if (it.length <= 10 && it.all(Char::isDigit)) input = it },
-                label = { Text("副屏编号") }, singleLine = true, isError = !valid,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                supportingText = { Text("本机背屏为 1。主屏 0 不可选择。") },
-            )
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = input, onValueChange = { if (it.length <= 10 && it.all(Char::isDigit)) input = it },
+                    label = { Text("副屏编号") }, singleLine = true, isError = !valid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    supportingText = { Text("本机背屏为 1。主屏 0 不可选择。") },
+                )
+            }
         },
         confirmButton = { TextButton(onClick = { id?.let(onSave) }, enabled = valid) { Text("保存") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },

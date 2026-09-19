@@ -31,7 +31,7 @@ description = "运行 Android Lint"
 run = "gradle --no-daemon lintDebug"
 
 [tasks.verify-core]
-description = "验证副屏状态解析与命令流程"
+description = "验证副屏控制、版本比较和更新选择逻辑"
 run = "gradle --no-daemon testDebugUnitTest"
 
 [tasks.verify]

@@ -29,8 +29,8 @@ android {
         applicationId = "cn.zgccrui.backscreen"
         minSdk = 30
         targetSdk = 36
-        versionCode = releaseVersionCode ?: 2
-        versionName = releaseTag?.removePrefix("v") ?: "1.0.1"
+        versionCode = releaseVersionCode ?: 3
+        versionName = releaseTag?.removePrefix("v") ?: "1.0.3"
     }
 
     signingConfigs.getByName("debug") {
