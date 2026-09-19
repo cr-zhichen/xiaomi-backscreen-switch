@@ -4,6 +4,22 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseTag = providers.environmentVariable("RELEASE_TAG").orNull
+val releaseTagPattern = Regex(
+    """v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?"""
+)
+require(releaseTag == null || releaseTagPattern.matches(releaseTag)) {
+    "RELEASE_TAG must be a version tag, such as v1.0.2 or v1.0.2-beat.1"
+}
+val releaseVersionCode = providers.environmentVariable("BUILD_NUMBER").orNull?.let { value ->
+    val number = value.toIntOrNull()
+    require(number != null && number in 1..2_099_999_000 && value == number.toString()) {
+        "BUILD_NUMBER must be an integer from 1 to 2099999000 without leading zeros"
+    }
+    1000 + number
+}
+val releasePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
+
 android {
     namespace = "cn.zgccrui.backscreen"
     compileSdk = 36
@@ -13,12 +29,22 @@ android {
         applicationId = "cn.zgccrui.backscreen"
         minSdk = 30
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = releaseVersionCode ?: 2
+        versionName = releaseTag?.removePrefix("v") ?: "1.0.1"
     }
 
     signingConfigs.getByName("debug") {
         storeFile = rootProject.file(".signing/debug.keystore")
+    }
+    signingConfigs.create("release") {
+        storeFile = rootProject.file("signing/release.p12")
+        storeType = "PKCS12"
+        storePassword = releasePassword
+        keyAlias = "release"
+        keyPassword = releasePassword
+    }
+    buildTypes.getByName("release") {
+        signingConfig = signingConfigs.getByName("release")
     }
 
     buildFeatures {

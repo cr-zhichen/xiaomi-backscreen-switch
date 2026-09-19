@@ -2,6 +2,8 @@
 java = "temurin-17.0.16+8"
 gradle = "8.13.0"
 android-sdk = "19.0"
+actionlint = "1.7.12"
+shellcheck = "0.11.0"
 
 [tasks.sdk]
 description = "接受 Android SDK 许可证并安装编译依赖"
@@ -34,11 +36,12 @@ run = "gradle --no-daemon testDebugUnitTest"
 
 [tasks.verify]
 description = "检查代码并运行控制逻辑回归测试"
+depends = ["workflows:lint"]
 run = "gradle --no-daemon lintDebug testDebugUnitTest"
 
 [tasks.package]
 description = "验证并构建交付 APK"
-depends = ["signing"]
+depends = ["signing", "workflows:lint"]
 run = "gradle --no-daemon lintDebug testDebugUnitTest assembleDebug"
 
 [tasks.install]
@@ -51,3 +54,28 @@ run = """
 mkdir -p "${APP_OUTPUT_DIR:-dist}"
 cp app/build/outputs/apk/debug/app-debug.apk "${APP_OUTPUT_DIR:-dist}/xiaomi-backscreen-switch.apk"
 """
+
+[tasks."workflows:lint"]
+description = "检查 GitHub Actions 和发布脚本"
+run = [
+  "actionlint .github/workflows/*.yml",
+  "shellcheck scripts/*.sh",
+]
+
+[tasks."signing:generate-release"]
+description = "首次生成加密发布证书和本地随机密码（不会覆盖已有文件）"
+run = "bash scripts/generate-release-key.sh"
+
+[tasks."release:validate-tag"]
+description = "确认发布 Tag 存在并指向当前提交"
+run = '''
+set -eu
+: "${RELEASE_TAG:?请设置 RELEASE_TAG}"
+git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+test "$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")" = "$(git rev-parse HEAD)"
+'''
+
+[tasks.release]
+description = "检查、构建并验证签名发布 APK"
+depends = ["workflows:lint"]
+run = "bash scripts/build-release.sh"
