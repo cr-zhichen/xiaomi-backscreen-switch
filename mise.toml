@@ -1,0 +1,53 @@
+[tools]
+java = "temurin-17.0.16+8"
+gradle = "8.13.0"
+android-sdk = "19.0"
+
+[tasks.sdk]
+description = "接受 Android SDK 许可证并安装编译依赖"
+run = [
+  "yes | sdkmanager --licenses > /dev/null",
+  "sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'",
+]
+
+[tasks.signing]
+description = "准备并保留本地调试签名"
+run = """
+mkdir -p .signing
+if [ ! -f .signing/debug.keystore ]; then
+  keytool -genkeypair -keystore .signing/debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=BackScreen, O=Personal, C=CN'
+fi
+"""
+
+[tasks.build]
+description = "构建可安装的 APK"
+depends = ["signing"]
+run = "gradle --no-daemon assembleDebug"
+
+[tasks.check]
+description = "运行 Android Lint"
+run = "gradle --no-daemon lintDebug"
+
+[tasks.verify-core]
+description = "验证副屏状态解析与命令流程"
+run = "gradle --no-daemon testDebugUnitTest"
+
+[tasks.verify]
+description = "检查代码并运行控制逻辑回归测试"
+run = "gradle --no-daemon lintDebug testDebugUnitTest"
+
+[tasks.package]
+description = "验证并构建交付 APK"
+depends = ["signing"]
+run = "gradle --no-daemon lintDebug testDebugUnitTest assembleDebug"
+
+[tasks.install]
+description = "安装 APK 到指定设备（通过 ANDROID_SERIAL 指定）"
+run = "adb install -r app/build/outputs/apk/debug/app-debug.apk"
+
+[tasks.export-apk]
+description = "导出 APK 到 APP_OUTPUT_DIR（默认 dist）"
+run = """
+mkdir -p "${APP_OUTPUT_DIR:-dist}"
+cp app/build/outputs/apk/debug/app-debug.apk "${APP_OUTPUT_DIR:-dist}/xiaomi-backscreen-switch.apk"
+"""
